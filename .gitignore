@@ -1,0 +1,25 @@
+# Environnement Python
+.venv/
+venv/
+venv_wsl/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Variables d'environnement
+.env
+
+# Modèles et données volumineuses
+models/
+data/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store

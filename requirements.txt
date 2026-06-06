@@ -1,0 +1,9 @@
+--prefer-binary
+
+fastapi
+uvicorn
+python-multipart
+pydantic
+requests
+streamlit
+# vllm removed: not required for Windows/WSL local deployment

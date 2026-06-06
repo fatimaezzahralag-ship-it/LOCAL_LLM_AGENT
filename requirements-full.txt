@@ -1,0 +1,19 @@
+--prefer-binary
+
+fastapi
+uvicorn
+python-multipart
+pydantic
+
+faiss-cpu
+PyMuPDF
+python-docx
+numpy>=1.26,<3.0
+sentence-transformers
+torch
+transformers
+accelerate
+
+# Optionnel et non supporté dans ce projet sur Windows/WSL.
+# Installe-le seulement dans un environnement Linux GPU dédié si nécessaire.
+# vllm (optionnel) - ne pas installer sur Windows/WSL
