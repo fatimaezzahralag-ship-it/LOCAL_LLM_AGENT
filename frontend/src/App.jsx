@@ -74,11 +74,16 @@ function App() {
               const newMessages = [...prev]
               const lastIndex = newMessages.length - 1
               
+              // LA CORRECTION EST ICI : On clone l'objet message pour bloquer le StrictMode
+              const lastMessage = { ...newMessages[lastIndex] }
+              
               if (data.sources) {
-                newMessages[lastIndex].sources = data.sources
+                lastMessage.sources = data.sources
               } else if (data.chunk) {
-                newMessages[lastIndex].content += data.chunk
+                lastMessage.content += data.chunk
               }
+              
+              newMessages[lastIndex] = lastMessage
               return newMessages
             })
           }
@@ -102,7 +107,7 @@ function App() {
       <div className="w-80 bg-slate-900 border-r border-emerald-900/30 p-6 flex flex-col shadow-2xl">
         <div className="flex items-center gap-3 mb-10 text-emerald-500">
           <ShieldCheck size={32} />
-          <h1 className="text-xl font-bold tracking-wider">LOGISYNC<br/><span className="text-sm text-slate-500 font-mono">SECURE AGENT v3.0</span></h1>
+          <h1 className="text-xl font-bold tracking-wider">LOCAL_LLM_AGENT<br/><span className="text-sm text-slate-500 font-mono">SECURE AGENT v3.0</span></h1>
         </div>
 
         <div className="flex-1">
