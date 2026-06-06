@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import json
 
 # L'adresse de votre backend FastAPI
 API_URL = "http://127.0.0.1:8000"
@@ -21,7 +22,6 @@ with st.sidebar:
     
     if st.button("Indexer le document") and uploaded_file:
         with st.spinner("Indexation vectorielle en cours..."):
-            # Préparation du fichier pour l'envoi vers FastAPI
             files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
             try:
                 response = requests.post(f"{API_URL}/upload", files=files)
@@ -48,32 +48,45 @@ if prompt := st.chat_input("Posez une question sur vos documents..."):
 
     # 2. Interroger l'agent (FastAPI)
     with st.chat_message("assistant"):
-        with st.spinner("L'agent réfléchit..."):
-            try:
-                response = requests.post(f"{API_URL}/chat", json={"prompt": prompt, "temperature": 0.1})
+        payload = {
+            "messages": st.session_state.messages, 
+            "temperature": 0.1
+        }
+        
+        try:
+            # ON ACTIVE stream=True POUR LE MODE MACHINE À ÉCRIRE
+            response = requests.post(f"{API_URL}/chat", json=payload, stream=True)
+            
+            if response.status_code == 200:
+                sources = []
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    answer = data["response"]
-                    sources = data.get("sources", [])
+                # Le "Décodeur" de flux corrigé (sans nonlocal)
+                def stream_parser():
+                    for line in response.iter_lines():
+                        if line:
+                            data = json.loads(line.decode("utf-8"))
+                            if "sources" in data:
+                                # On ajoute les éléments à la liste existante
+                                sources.extend(data["sources"])
+                            if "chunk" in data:
+                                yield data["chunk"]
 
-                    # Afficher la réponse
-                    st.markdown(answer)
-                    
-                    # Afficher les sources (chunks FAISS) dans un menu déroulant
-                    if sources:
-                        with st.expander("🔍 Voir les sources extraites de FAISS"):
-                            for i, source in enumerate(sources):
-                                st.info(f"**Extrait {i+1} :**\n\n{source}")
+                # st.write_stream est la fonction magique de Streamlit !
+                full_answer = st.write_stream(stream_parser())
+                
+                if sources:
+                    with st.expander("🔍 Voir les sources extraites"):
+                        for i, source in enumerate(sources):
+                            st.info(f"**Extrait {i+1} :**\n\n{source}")
 
-                    # Sauvegarder dans l'historique
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
+                st.session_state.messages.append({"role": "assistant", "content": full_answer})
+            
+            elif response.status_code == 503:
+                st.error("L'agent est en cours de démarrage ou les modèles ne sont pas chargés.")
+            elif response.status_code == 400:
+                st.error("Veuillez d'abord uploader un document.")
+            else:
+                st.error(f"Erreur du modèle : {response.text}")
                 
-                elif response.status_code == 503:
-                    st.error("L'agent est en cours de démarrage ou les modèles ne sont pas chargés.")
-                else:
-                    st.error(f"Erreur du modèle : {response.text}")
-                    
-            except requests.exceptions.ConnectionError:
-                st.error("Impossible de contacter le backend. Vérifiez que FastAPI tourne.")
-                
+        except requests.exceptions.ConnectionError:
+            st.error("Impossible de contacter le backend. Vérifiez que FastAPI tourne.")

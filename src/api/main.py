@@ -1,146 +1,111 @@
 import os
 import shutil
+import json
 from typing import Annotated
 from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware # NOUVELLE LIGNE À AJOUTER EN HAUT
 
-# Importation de nos modules locaux
 from src.engine.llm_manager import LocalLLMManager
 from src.engine.rag_manager import LocalRAGManager
 from src.utils.file_reader import extract_text_from_pdf, chunk_text
 from src.core.config import settings
 
-# Variables globales pour maintenir les modèles en VRAM
 llm_manager = None
 rag_manager = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global llm_manager, rag_manager
-    
-    # 1. Chargement du modèle LLM et du RAG selon la configuration locale
     try:
-        llm_manager = LocalLLMManager(
-            model_path=str(settings.llm_model_path),
-            backend=settings.llm_backend,
-        )
+        llm_manager = LocalLLMManager(model_path=str(settings.llm_model_path), backend=settings.llm_backend)
     except Exception as exc:
-        llm_manager = None
-        print(f"LLM indisponible au démarrage: {exc}")
-
+        print(f"LLM indisponible: {exc}")
     try:
         rag_manager = LocalRAGManager(embedding_model_name=settings.embedding_model_name)
     except Exception as exc:
-        rag_manager = None
-        print(f"RAG indisponible au démarrage: {exc}")
-    
+        print(f"RAG indisponible: {exc}")
     yield
-    
-    # Nettoyage à l'arrêt du serveur
     llm_manager = None
     rag_manager = None
 
-app = FastAPI(
-    title="Agent LLM Local - Prototype",
-    description="API locale complète avec RAG et inférence GPU",
-    version="1.0.0",
-    lifespan=lifespan
+app = FastAPI(title="Agent LLM Local - Version Hybride", version="3.0.0", lifespan=lifespan)
+# --- NOUVEAU BLOC CORS ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # En production, on mettra l'URL exacte de React
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+# -------------------------
+class Message(BaseModel):
+    role: str
+    content: str
 
-upload_responses = {
-    400: {"description": "Fichier non supporté"},
-    500: {"description": "Erreur pendant le traitement"},
-    503: {"description": "Moteur RAG indisponible"},
-}
-
-chat_responses = {
-    400: {"description": "Aucun document indexé"},
-    500: {"description": "Erreur de génération"},
-    503: {"description": "Modèles non chargés"},
-}
-
-# --- Modèles de données ---
 class PromptRequest(BaseModel):
-    prompt: str
+    messages: list[Message]
     temperature: float = 0.1
 
-class GenerationResponse(BaseModel):
-    response: str
-    sources: list[str] = []
-
-# --- Endpoints ---
-
-@app.post("/upload", responses=upload_responses)
+@app.post("/upload")
 def upload_document(file: Annotated[UploadFile, File(...)]):
-    """Reçoit un PDF, extrait le texte, le découpe et l'indexe dans FAISS."""
     if rag_manager is None:
-        raise HTTPException(status_code=503, detail="Le moteur RAG n'est pas disponible.")
-
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont supportés pour le prototype.")
+        raise HTTPException(status_code=503, detail="Moteur RAG indisponible.")
     
-    # Sauvegarde temporaire du fichier
     file_location = settings.raw_documents_dir / file.filename
     os.makedirs(settings.raw_documents_dir, exist_ok=True)
     
-    try:
-        with open(file_location, "wb+") as file_object:
-            shutil.copyfileobj(file.file, file_object)
-            
-        # Extraction et découpage
-        raw_text = extract_text_from_pdf(file_location)
-        chunks = chunk_text(raw_text, chunk_size=1000, overlap=200)
+    with open(file_location, "wb+") as file_object:
+        shutil.copyfileobj(file.file, file_object)
         
-        # Vectorisation sur GPU
-        rag_manager.add_documents(chunks)
-        
-        return {
-            "status": "success", 
-            "message": f"Document {file.filename} indexé avec succès.",
-            "chunks_processed": len(chunks)
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur lors du traitement : {str(e)}")
-
-@app.post("/chat", response_model=GenerationResponse, responses=chat_responses)
-async def chat_endpoint(request: PromptRequest):
-    """Recherche des informations dans FAISS puis interroge le LLM."""
-    if llm_manager is None or rag_manager is None:
-        raise HTTPException(status_code=503, detail="Les modèles ne sont pas encore chargés.")
+    raw_text = extract_text_from_pdf(file_location)
+    chunks = chunk_text(raw_text, chunk_size=1000, overlap=200)
     
-    # OPTIMISATION : Vérifier s'il y a des documents avant de déranger le modèle
-    if not rag_manager.documents_store:
-        return {
-            "response": "Veuillez d'abord uploader un document PDF avant de me poser une question.",
-            "sources": []
-        }
+    # Le rag_manager va maintenant indexer dans FAISS ET dans BM25
+    rag_manager.add_documents(chunks)
+    
+    return {"status": "success", "message": f"Document indexé avec succès dans FAISS et BM25."}
 
-    try:
-        # 1. Recherche sémantique dans les documents (Top 3 des passages pertinents)
-        context_chunks = rag_manager.search(request.prompt, top_k=3)
-        context_text = "\n\n---\n\n".join(context_chunks)
-        
-        # 2. Construction du Prompt Système + Contexte
-        augmented_prompt = f"""Réponds à la question de l'utilisateur en te basant STRICTEMENT sur le contexte ci-dessous.
-Si l'information n'y est pas, dis uniquement 'Je n'ai pas trouvé l'information dans vos documents.'
-Reste concis (3 ou 4 phrases maximum).
+@app.post("/chat")
+async def chat_endpoint(request: PromptRequest):
+    if llm_manager is None or rag_manager is None:
+        raise HTTPException(status_code=503, detail="Modèles non chargés.")
+    
+    if not rag_manager.documents_store:
+        raise HTTPException(status_code=400, detail="Veuillez uploader un document PDF d'abord.")
+
+    # On récupère la dernière question posée
+    user_query = request.messages[-1].content
+    
+    # Le rag_manager.search() fait maintenant la fusion BM25 + FAISS
+    context_chunks = rag_manager.search(user_query, top_k=3)
+    context_text = "\n\n---\n\n".join(context_chunks)
+    
+    # --- LA NOUVELLE CONSIGNE HYBRIDE ---
+    augmented_prompt = f"""Réponds à la question en te basant sur le contexte ci-dessous.
+Tu as le droit d'utiliser tes connaissances générales pour faire des déductions logiques entre la question et le contexte (ex: géographie, synonymes).
+Si l'information est totalement absente, dis uniquement 'Je n'ai pas trouvé l'information'.
 
 CONTEXTE :
 {context_text}
 
 QUESTION :
-{request.prompt}"""
+{user_query}"""
 
-        # 3. Génération de la réponse via le GPU (ultra rapide grâce au nouveau llm_manager)
-        answer = await llm_manager.generate_response(
-            prompt=augmented_prompt,
-            temperature=request.temperature
-        )
+    formatted_messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+    formatted_messages[-1]["content"] = augmented_prompt
+
+    # Le Générateur de Flux (Streaming)
+    async def response_generator():
+        # 1. On envoie les sources en premier
+        yield json.dumps({"sources": context_chunks}) + "\n"
         
-        return {
-            "response": answer,
-            "sources": context_chunks # On renvoie les sources pour affichage côté front
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur du modèle : {str(e)}")
+        # 2. On envoie les mots au fur et à mesure
+        async for chunk in llm_manager.stream_response(formatted_messages, temperature=request.temperature):
+            if chunk:
+                yield json.dumps({"chunk": chunk}) + "\n"
+
+    # On retourne une StreamingResponse (le canal reste ouvert)
+    return StreamingResponse(response_generator(), media_type="application/x-ndjson")
