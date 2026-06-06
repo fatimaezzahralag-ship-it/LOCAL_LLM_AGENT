@@ -22,7 +22,8 @@ The project is configured to use:
 - Do not run `uvicorn` directly unless you know it resolves to `.venv/bin/uvicorn`.
 - If you want the RAG and model stack, install `requirements-full.txt`.
 
-  🚀 Alignement Opérationnel (Installation)
+🚀 Alignement Opérationnel (Installation)
+
 1. Configuration du Backend (FastAPI)
 Assurez-vous d'avoir Python 3.10+ installé.
 
