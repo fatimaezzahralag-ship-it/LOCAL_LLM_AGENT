@@ -8,7 +8,7 @@ def _get_env_path(name: str, default: str) -> Path:
     return Path(os.getenv(name, default))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True) #cree une classe de configuration immuable (frozen=True) qui contient tous les paramètres de configuration de l'application (chemins, noms de modèles, etc.) , les valeurs sont chargées à partir des variables d'environnement ou des valeurs par défaut
 class Settings:
     app_name: str = os.getenv("APP_NAME", "LOCAL_LLM_AGENT")
     app_env: str = os.getenv("APP_ENV", "local")
@@ -24,9 +24,9 @@ class Settings:
     secret_key: str = os.getenv("SECRET_KEY", "change-me")
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=1) #cache la fonction get_settings() pour éviter de recréer une instance de Settings à chaque appel (optimisation de performance)
 def get_settings() -> Settings:
     return Settings()
 
 
-settings = get_settings()
+settings = get_settings()  

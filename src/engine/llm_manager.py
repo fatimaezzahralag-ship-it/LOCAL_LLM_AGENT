@@ -3,7 +3,7 @@ import os
 from threading import Thread
 
 try:
-    import torch
+    import torch  # PyTorch est nécessaire pour le moteur LLM local car il utilise les modèles de transformers qui sont basés sur PyTorch
     from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 except ImportError:
     torch = None
